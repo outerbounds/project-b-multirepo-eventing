@@ -1,4 +1,5 @@
-from metaflow import step, ArgoEvent, Parameter, Flow, Run
+from metaflow import step, Flow, Run
+from metaflow.integrations import ArgoEvent
 from obproject import ProjectFlow
 from time import sleep
 import time
