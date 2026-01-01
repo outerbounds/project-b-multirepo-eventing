@@ -1,0 +1,5 @@
+platform = 'dev-yellow.outerbounds.xyz'
+
+# ⬇️  Change these to match your project name
+project = 'obproject_b'
+title = 'Outerbounds Project B'
