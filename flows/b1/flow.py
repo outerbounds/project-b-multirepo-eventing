@@ -57,15 +57,15 @@ def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeou
         namespace(original_ns) # Restore original namespace
 
 
-def wait_for_successful_run_completion(run_id, poll_interval, timeout=600):
+def wait_for_successful_run_completion(run_pathspec, poll_interval, timeout=600):
     start_time = time.time()
     while True:
-        run = Run(run_id)
+        run = Run(run_pathspec)
         if run.finished and run.successful:
             return run
         sleep(poll_interval)
         if time.time() - start_time > timeout:
-            raise TimeoutError(f"Timeout waiting for run {run_id} to complete")
+            raise TimeoutError(f"Timeout waiting for run {run_pathspec} to complete")
     return None
 
 # @project automatically synchronized with obproject.toml when using obproject.ProjectFlow.
@@ -88,7 +88,7 @@ class FlowB1(ProjectFlow):
         self.next(self.run_a1_paramset1, self.run_a1_paramset2)
 
     def _operate_a1_run(self, paramset, poll_interval=10, timeout=300):
-        
+
         try:
             self.event_id = ArgoEvent(name='eval_task_submit').safe_publish(payload=paramset)
             self.event_publish_time = datetime.now()
@@ -110,7 +110,7 @@ class FlowB1(ProjectFlow):
         else:
             print("No trigger found")        
         
-        wait_for_successful_run_completion(run_id=self.run.id, poll_interval=10)
+        wait_for_successful_run_completion(run_pathspec=f"{self.run.parent.id}/{self.run.id}", poll_interval=10)
         return self.run
 
     @step
