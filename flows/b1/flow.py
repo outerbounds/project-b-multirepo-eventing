@@ -35,7 +35,11 @@ from datetime import datetime
 
 
 def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeout=600):
-    """Locate a run by event_id across all namespaces (cross-project)."""
+    """Locate a run by event_id across all namespaces (cross-project).
+
+    The event_id from ArgoEvent.safe_publish() matches run.trigger.event.id
+    See: https://docs.metaflow.org/production/event-triggering/inspect-events
+    """
     # Use global namespace to search across all projects
     original_ns = namespace(None)
     try:
@@ -44,7 +48,8 @@ def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeou
             for run in Flow(flow_name).runs():
                 if run.created_at < event_publish_time:
                     break  # All remaining runs are older, stop searching
-                if run.event_id == event_id:
+                # Event ID is accessed via run.trigger.event.id
+                if run.trigger and run.trigger.event and run.trigger.event.id == event_id:
                     return run
             sleep(poll_interval)
         raise TimeoutError(f"Timeout waiting for run {flow_name} with event ID {event_id}")
@@ -117,28 +122,16 @@ class FlowB1(ProjectFlow):
         #   https://docs.metaflow.org/metaflow/basics#artifacts
         self.run = self._operate_a1_run(self.paramset1) # run is completed.
         if self.run is None:
-            print("FlowA1 run not found or failed to locate")
-            self.result = None
-        else:
-            try:
-                self.result = self.run['end'].task.data.result
-            except Exception as e:
-                print(f"Error getting result from FlowA1 run {self.run.id}: {e}")
-                self.result = None
+            raise RuntimeError("FlowA1 run not found or failed to locate - cannot proceed")
+        self.result = self.run['end'].task.data.result
         self.next(self.aggregate_and_do_work)
 
     @step
     def run_a1_paramset2(self):
         self.run = self._operate_a1_run(self.paramset2)
         if self.run is None:
-            print("FlowA1 run not found or failed to locate")
-            self.result = None
-        else:
-            try:
-                self.result = self.run['end'].task.data.result
-            except Exception as e:
-                print(f"Error getting result from FlowA1 run {self.run.id}: {e}")
-                self.result = None
+            raise RuntimeError("FlowA1 run not found or failed to locate - cannot proceed")
+        self.result = self.run['end'].task.data.result
         self.next(self.aggregate_and_do_work)
     
     @step
