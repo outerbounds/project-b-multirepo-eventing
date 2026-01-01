@@ -103,12 +103,11 @@ class FlowB1(ProjectFlow):
             print(f"Error locating run: {e}")
             return None
         
-        print(f"Found run: {self.run.id}")
         trigger = self.run.trigger
         if trigger and trigger.event:
-            print(f"_trigger_ {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
+            print(f"Found run: {self.run.id} triggered by {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
         else:
-            print("No trigger found")        
+            print(f"Found run: {self.run.id}")        
         
         wait_for_successful_run_completion(run_pathspec=f"{self.run.parent.id}/{self.run.id}", poll_interval=10)
         return self.run
