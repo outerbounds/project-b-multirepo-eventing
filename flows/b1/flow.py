@@ -54,7 +54,7 @@ def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeou
             sleep(poll_interval)
         raise TimeoutError(f"Timeout waiting for run {flow_name} with event ID {event_id}")
     finally:
-        namespace(original_ns)  # Restore original namespace
+        namespace(original_ns) # Restore original namespace
 
 
 def wait_for_successful_run_completion(run_id, poll_interval, timeout=600):
@@ -88,6 +88,7 @@ class FlowB1(ProjectFlow):
         self.next(self.run_a1_paramset1, self.run_a1_paramset2)
 
     def _operate_a1_run(self, paramset, poll_interval=10, timeout=300):
+        
         try:
             self.event_id = ArgoEvent(name='eval_task_submit').safe_publish(payload=paramset)
             self.event_publish_time = datetime.now()
@@ -104,17 +105,13 @@ class FlowB1(ProjectFlow):
         
         print(f"Found run: {self.run.id}")
         trigger = self.run.trigger
-        print(f"Trigger: {trigger}" if trigger else "No trigger found")
         if trigger and trigger.event:
-            # Payload is accessed via trigger.event, not trigger directly
-            payload = trigger.event.payload
-            print(f"Payload: {payload}")
-            # Note: payload comparison may need adjustment based on how params are serialized
-            wait_for_successful_run_completion(run_id=self.run.id, poll_interval=10)
-            return self.run
+            print(f"_trigger_ {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
         else:
-            print("No trigger or event found")
-            return None
+            print("No trigger found")        
+        
+        wait_for_successful_run_completion(run_id=self.run.id, poll_interval=10)
+        return self.run
 
     @step
     def run_a1_paramset1(self):
