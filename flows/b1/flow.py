@@ -1,4 +1,4 @@
-from metaflow import step, Flow, Run, namespace
+from metaflow import step, Flow, Run, namespace, pypi
 from metaflow.integrations import ArgoEvent
 from obproject import ProjectFlow
 from time import sleep
@@ -57,16 +57,72 @@ def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeou
         namespace(original_ns) # Restore original namespace
 
 
-def wait_for_successful_run_completion(run_pathspec, poll_interval, timeout=600):
+def get_workflow_status(run_id):
+    """Get the status of an Argo workflow, matching the Outerbounds UI logic exactly.
+
+    Unlike Run.finished/Run.successful (which depend on the 'end' step's artifacts
+    and can't distinguish running from failed/terminated), this queries the Argo
+    workflow object directly — the same source the Outerbounds UI uses.
+
+    Returns a dict with:
+        status: "Pending" | "Running" | "Suspended" | "Succeeded" | "Failed" | "Terminated" | "Terminating"
+        terminated_by: str or None (username who terminated, if applicable)
+    """
+    import json
+    from metaflow.plugins.argo.argo_client import ArgoClient
+    from metaflow.metaflow_config import KUBERNETES_NAMESPACE
+
+    workflow_name = run_id[5:]  # strip "argo-" prefix
+    client = ArgoClient(namespace=KUBERNETES_NAMESPACE)
+    wf = client.get_workflow(workflow_name)
+
+    phase = wf["status"]["phase"]
+    shutdown = wf["spec"].get("shutdown")
+    suspend = wf["spec"].get("suspend")
+    annotations = wf.get("metadata", {}).get("annotations", {})
+
+    # Parse terminated_by — stored as JSON string in annotation
+    terminated_by = None
+    raw = annotations.get("metaflow/terminated_by_user")
+    if raw:
+        try:
+            terminated_by = json.loads(raw).get("name")
+        except (json.JSONDecodeError, AttributeError):
+            terminated_by = raw
+
+    # Match UI logic: utqiagvik/ui/src/graphql/resolvers/workflow.ts getWorkflowStatus()
+    if phase == "Running":
+        if shutdown == "Terminate":
+            status = "Terminating"
+        elif suspend:
+            status = "Suspended"
+        else:
+            status = "Running"
+    elif phase == "Failed":
+        if shutdown == "Terminate":
+            status = "Terminated"
+        else:
+            status = "Failed"
+    elif phase == "Succeeded":
+        status = "Succeeded"
+    elif phase == "Pending":
+        status = "Pending"
+    else:
+        status = phase  # "Error", "Unknown", etc.
+
+    return {"status": status, "terminated_by": terminated_by}
+
+
+def wait_for_run_completion(run_id, poll_interval=10, timeout=600):
+    """Wait for an Argo workflow to complete. Returns the status dict from get_workflow_status."""
     start_time = time.time()
     while True:
-        run = Run(run_pathspec)
-        if run.finished and run.successful:
-            return run
-        sleep(poll_interval)
+        result = get_workflow_status(run_id)
+        if result["status"] not in ("Pending", "Running", "Terminating", "Suspended"):
+            return result
         if time.time() - start_time > timeout:
-            raise TimeoutError(f"Timeout waiting for run {run_pathspec} to complete")
-    return None
+            raise TimeoutError(f"Timeout waiting for {run_id}")
+        sleep(poll_interval)
 
 # @project automatically synchronized with obproject.toml when using obproject.ProjectFlow.
 # In this example, the notable difference is these are different in /prj-a and /prj-b. 
@@ -103,16 +159,23 @@ class FlowB1(ProjectFlow):
             print(f"Error locating run: {e}")
             return None
         
-        print(f"Found run: {self.run.id}")
         trigger = self.run.trigger
         if trigger and trigger.event:
-            print(f"_trigger_ {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
+            print(f"Found run: {self.run.id} triggered by {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
         else:
-            print("No trigger found")        
-        
-        wait_for_successful_run_completion(run_pathspec=f"{self.run.parent.id}/{self.run.id}", poll_interval=10)
-        return self.run
+            print(f"Found run: {self.run.id}")
 
+        # Query Argo directly for workflow status — correctly detects failures
+        # and manual terminations (unlike Run.finished/Run.successful).
+        result = wait_for_run_completion(run_id=self.run.id, timeout=timeout)
+        if result["status"] == "Terminated":
+            raise RuntimeError(f"Run {self.run.id} was terminated by {result['terminated_by']}")
+        elif result["status"] != "Succeeded":
+            raise RuntimeError(f"Run {self.run.id} ended with status: {result['status']}")
+
+        return Run(f"{self.run.parent.id}/{self.run.id}", _namespace_check=False)
+
+    @pypi(packages={"kubernetes": ">=28.1.0"})
     @step
     def run_a1_paramset1(self):
         # The runtime task's job is to 
@@ -125,6 +188,7 @@ class FlowB1(ProjectFlow):
         self.result = self.run['end'].task.data.result
         self.next(self.aggregate_and_do_work)
 
+    @pypi(packages={"kubernetes": ">=28.1.0"})
     @step
     def run_a1_paramset2(self):
         self.run = self._operate_a1_run(self.paramset2)
