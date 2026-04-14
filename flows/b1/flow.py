@@ -1,4 +1,4 @@
-from metaflow import step, Flow, Run, namespace
+from metaflow import step, Flow, Run, namespace, pypi
 from metaflow.integrations import ArgoEvent
 from obproject import ProjectFlow
 from time import sleep
@@ -57,16 +57,38 @@ def locate_run(flow_name, event_id, event_publish_time, poll_interval=10, timeou
         namespace(original_ns) # Restore original namespace
 
 
-def wait_for_successful_run_completion(run_pathspec, poll_interval, timeout=600):
+def wait_for_run_completion(run_id, poll_interval=10, timeout=600):
+    """Wait for an Argo workflow to complete, querying Argo directly for status.
+
+    Unlike Run.finished/Run.successful (which depend on the 'end' step's artifacts
+    and can't distinguish running from failed/terminated), this queries the Argo
+    workflow phase directly — the same source the Outerbounds UI uses.
+
+    Returns the status string: "Succeeded", "Failed", or "Terminated".
+    Raises TimeoutError if the workflow doesn't complete within timeout.
+    """
+    from metaflow.plugins.argo.argo_client import ArgoClient
+    from metaflow.metaflow_config import KUBERNETES_NAMESPACE
+
+    workflow_name = run_id[5:]  # strip "argo-" prefix
+    client = ArgoClient(namespace=KUBERNETES_NAMESPACE)
+
     start_time = time.time()
     while True:
-        run = Run(run_pathspec)
-        if run.finished and run.successful:
-            return run
-        sleep(poll_interval)
+        wf = client.get_workflow(workflow_name)
+        phase = wf["status"]["phase"]
+        shutdown = wf["spec"].get("shutdown")
+
+        if phase == "Succeeded":
+            return "Succeeded"
+        elif phase == "Failed" and shutdown == "Terminate":
+            return "Terminated"
+        elif phase in ("Failed", "Error"):
+            return "Failed"
+
         if time.time() - start_time > timeout:
-            raise TimeoutError(f"Timeout waiting for run {run_pathspec} to complete")
-    return None
+            raise TimeoutError(f"Timeout waiting for {run_id}")
+        sleep(poll_interval)
 
 # @project automatically synchronized with obproject.toml when using obproject.ProjectFlow.
 # In this example, the notable difference is these are different in /prj-a and /prj-b. 
@@ -107,11 +129,17 @@ class FlowB1(ProjectFlow):
         if trigger and trigger.event:
             print(f"Found run: {self.run.id} triggered by {trigger.event.name} ({trigger.event.id} | {trigger.event.timestamp} | {trigger.event.type})")
         else:
-            print(f"Found run: {self.run.id}")        
-        
-        wait_for_successful_run_completion(run_pathspec=f"{self.run.parent.id}/{self.run.id}", poll_interval=10)
-        return self.run
+            print(f"Found run: {self.run.id}")
 
+        # Query Argo directly for workflow status — correctly detects failures
+        # and manual terminations (unlike Run.finished/Run.successful).
+        status = wait_for_run_completion(run_id=self.run.id, timeout=timeout)
+        if status != "Succeeded":
+            raise RuntimeError(f"Run {self.run.id} ended with status: {status}")
+
+        return Run(f"{self.run.parent.id}/{self.run.id}", _namespace_check=False)
+
+    @pypi(packages={"kubernetes": ">=28.1.0"})
     @step
     def run_a1_paramset1(self):
         # The runtime task's job is to 
@@ -124,6 +152,7 @@ class FlowB1(ProjectFlow):
         self.result = self.run['end'].task.data.result
         self.next(self.aggregate_and_do_work)
 
+    @pypi(packages={"kubernetes": ">=28.1.0"})
     @step
     def run_a1_paramset2(self):
         self.run = self._operate_a1_run(self.paramset2)
