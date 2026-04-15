@@ -90,7 +90,6 @@ def get_workflow_status(run_id):
         except (json.JSONDecodeError, AttributeError):
             terminated_by = raw
 
-    # Match UI logic: utqiagvik/ui/src/graphql/resolvers/workflow.ts getWorkflowStatus()
     if phase == "Running":
         if shutdown == "Terminate":
             status = "Terminating"
